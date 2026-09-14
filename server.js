@@ -20,10 +20,29 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 if (!fs.existsSync(ITEMS_FILE)) fs.writeFileSync(ITEMS_FILE, JSON.stringify([{ name: "Farus", limit: 4, currentBids: 0 }]));
 if (!fs.existsSync(BIDS_FILE)) fs.writeFileSync(BIDS_FILE, JSON.stringify([]));
 
-// Helper functions to read and write records safely
-function getItems() { return JSON.parse(fs.readFileSync(ITEMS_FILE, 'utf8')); }
+// Helper functions to read and write records safely with explicit type safety mapping
+function getItems() { 
+    const data = JSON.parse(fs.readFileSync(ITEMS_FILE, 'utf8'));
+    return data.map(i => ({
+        name: i.name,
+        limit: parseInt(i.limit) || 0,
+        currentBids: parseInt(i.currentBids) || 0
+    }));
+}
 function saveItems(data) { fs.writeFileSync(ITEMS_FILE, JSON.stringify(data, null, 2)); }
-function getBids() { return JSON.parse(fs.readFileSync(BIDS_FILE, 'utf8')); }
+
+function getBids() { 
+    const data = JSON.parse(fs.readFileSync(BIDS_FILE, 'utf8'));
+    return data.map(b => ({
+        id: b.id,
+        name: b.name,
+        item: b.item,
+        quantity: parseInt(b.quantity) || 0,
+        amount: parseFloat(b.amount) || 0,
+        totalOffer: parseFloat(b.totalOffer) || 0,
+        status: b.status
+    }));
+}
 function saveBids(data) { fs.writeFileSync(BIDS_FILE, JSON.stringify(data, null, 2)); }
 
 // --- PUBLIC API FOR GOOGLE SITES FRONTEND ---
@@ -140,8 +159,8 @@ app.get('/admin', (req, res) => {
                     <td>${b.name}</td>
                     <td>${b.item}</td>
                     <td>${b.quantity}</td>
-                    <td>$${Number(b.amount).toFixed(2)}</td>
-                    <td>$${Number(b.totalOffer).toFixed(2)}</td>
+                    <td>$${b.amount.toFixed(2)}</td>
+                    <td>$${b.totalOffer.toFixed(2)}</td>
                     <td><strong>${b.status.toUpperCase()}</strong></td>
                     <td>
                         <button class="btn accept" onclick="updateStatus(${b.id}, 'accepted')">Accept</button>
@@ -165,14 +184,15 @@ app.get('/admin', (req, res) => {
                     let highestBid = null;
                     
                     if (itemBids.length > 0) {
-                        highestBid = itemBids.reduce((max, b) => (b.amount > max.amount ? b : max), itemBids);
+                        // Math comparison loop 
+                        highestBid = itemBids.reduce((max, b) => (b.amount > max.amount ? b : max));
                     }
                     
                     return `
                     <tr>
                         <td>${i.name}</td>
                         <td>${highestBid ? highestBid.name : 'No bids yet'}</td>
-                        <td>${highestBid ? '$' + Number(highestBid.amount).toFixed(2) : '-'}</td>
+                        <td>${highestBid ? '$' + highestBid.amount.toFixed(2) : '-'}</td>
                     </tr>`;
                 }).join('')}
             </table>
@@ -240,6 +260,7 @@ app.post('/admin/update-bid', (req, res) => {
     res.json({ success: true });
 });
 
+// Route to delete/decline a bid and restore item slot metrics
 // Route to delete/decline a bid and restore item slot metrics
 app.post('/admin/delete-bid', (req, res) => {
     const { id } = req.body;
