@@ -1,12 +1,14 @@
 const express = require('express');
 const cors = require('cors');
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
+// Essential middlewares - Must be at the very top!
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true })); // Fixes the form submission issue
 
-// In-memory data structures (Will reset if server sleeps. Use a database like MongoDB Atlas Free tier later if needed)
+// Temporary in-memory databases
 let items = [
     { name: "Vintage Watch", limit: 3, currentBids: 0 },
     { name: "Leather Jacket", limit: 1, currentBids: 0 }
@@ -35,8 +37,8 @@ app.post('/api/bids', (req, res) => {
         id: Date.now(),
         name,
         item,
-        amount,
-        status: 'pending' // pending, accepted, declined, maybe
+        amount: parseFloat(amount),
+        status: 'pending' 
     };
 
     bids.push(newBid);
@@ -45,7 +47,7 @@ app.post('/api/bids', (req, res) => {
 });
 
 
-// --- ADMIN BACKEND DASHBOARD (PANEL HTML) ---
+// --- ADMIN BACKEND DASHBOARD ---
 
 app.get('/admin', (req, res) => {
     res.send(`
@@ -54,13 +56,16 @@ app.get('/admin', (req, res) => {
     <head>
         <title>Admin Dashboard</title>
         <style>
-            body { font-family: sans-serif; margin: 30px; background: #f4f4f9; }
+            body { font-family: sans-serif; margin: 30px; background: #f4f4f9; color: #333;}
             table { width: 100%; border-collapse: collapse; margin-bottom: 30px; background: white;}
-            th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
-            th { background-color: #333; color: white; }
-            .btn { padding: 5px 10px; cursor:pointer; border:none; color:white; border-radius:3px;}
-            .accept { background: green; } .decline { background: red; } .maybe { background: orange; }
+            th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+            th { background-color: #008CBA; color: white; }
+            .btn { padding: 6px 12px; cursor:pointer; border:none; color:white; border-radius:3px; font-weight: bold;}
+            .accept { background: #28a745; } .decline { background: #dc3545; } .maybe { background: #ffc107; color: black; }
             .section { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px;}
+            input[type="text"], input[type="number"] { padding: 8px; width: 200px; margin-right: 10px; border: 1px solid #ccc; border-radius: 4px; }
+            button[type="submit"] { padding: 8px 15px; background: #008CBA; color: white; border: none; border-radius: 4px; cursor: pointer; }
+            .remove-link { color: #dc3545; text-decoration: none; font-weight: bold; margin-left: 10px;}
         </style>
     </head>
     <body>
@@ -69,13 +74,18 @@ app.get('/admin', (req, res) => {
         <div class="section">
             <h2>Add / Manage Items</h2>
             <form action="/admin/add-item" method="POST">
-                <input type="text" name="name" placeholder="Item Name" required>
-                <input type="number" name="limit" placeholder="Max Allowable Bids" required min="1">
+                <input type="text" name="itemName" placeholder="Item Name" required>
+                <input type="number" name="itemLimit" placeholder="Max Allowable Bids" required min="1">
                 <button type="submit">Add Item</button>
             </form>
-            <h3>Current Items</h3>
+            <h3>Current Items Available</h3>
             <ul>
-                ${items.map(i => `<li>${i.name} (Limit: ${i.limit}, Received: ${i.currentBids}) <a href="/admin/delete-item?name=${encodeURIComponent(i.name)}">[Remove]</a></li>`).join('')}
+                ${items.map(i => `
+                    <li>
+                        <strong>${i.name}</strong> (Limit: ${i.limit}, Received: ${i.currentBids}) 
+                        <a class="remove-link" href="/admin/delete-item?name=${encodeURIComponent(i.name)}">[Remove]</a>
+                    </li>
+                `).join('')}
             </ul>
         </div>
 
@@ -85,7 +95,7 @@ app.get('/admin', (req, res) => {
                 <tr>
                     <th>Bidder Name</th>
                     <th>Item Ordered</th>
-                    <th>Amount Offerd</th>
+                    <th>Amount Offered</th>
                     <th>Current Status</th>
                     <th>Actions</th>
                 </tr>
@@ -97,8 +107,8 @@ app.get('/admin', (req, res) => {
                     <td><strong>${b.status.toUpperCase()}</strong></td>
                     <td>
                         <button class="btn accept" onclick="updateStatus(${b.id}, 'accepted')">Accept</button>
-                        <button class="btn decline" onclick="updateStatus(${b.id}, 'declined')">Decline</button>
                         <button class="btn maybe" onclick="updateStatus(${b.id}, 'maybe')">Maybe</button>
+                        <button class="btn decline" onclick="updateStatus(${b.id}, 'declined')">Decline</button>
                     </td>
                 </tr>`).join('')}
             </table>
@@ -140,35 +150,24 @@ app.get('/admin', (req, res) => {
     `);
 });
 
-// Admin endpoints for form actions
+// Corrected logic route for adding items from dashboard form
 app.post('/admin/add-item', (req, res) => {
-    const { name, limit } = req.body;
-    // Basic body parser handling fallback if urlencoded isn't explicitly used
-    // For standard form posts, we add dynamic handling:
-    let itemName = req.body.name;
-    let itemLimit = parseInt(req.body.limit);
+    const name = req.body.itemName;
+    const limit = parseInt(req.body.itemLimit);
 
-    if(!itemName) {
-        // Fallback parse if standard URL encoding is used instead of JSON
-        return res.redirect('/admin'); 
+    if (name && !isNaN(limit)) {
+        items.push({ name: name.trim(), limit: limit, currentBids: 0 });
     }
-    
-    items.push({ name: itemName, limit: itemLimit, currentBids: 0 });
     res.redirect('/admin');
 });
 
-// Allow application/x-www-form-urlencoded parsing for native HTML forms
-app.use(express.urlencoded({ extended: true }));
-app.post('/admin/add-item', (req, res) => {
-    items.push({ name: req.body.name, limit: parseInt(req.body.limit), currentBids: 0 });
-    res.redirect('/admin');
-});
-
+// Logic route for deleting items
 app.get('/admin/delete-item', (req, res) => {
     items = items.filter(i => i.name !== req.query.name);
     res.redirect('/admin');
 });
 
+// Logic route for live bid status updates
 app.post('/admin/update-bid', (req, res) => {
     const { id, status } = req.body;
     const bid = bids.find(b => b.id === id);
