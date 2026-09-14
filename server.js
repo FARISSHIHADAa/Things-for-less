@@ -52,7 +52,7 @@ app.post('/api/bids', (req, res) => {
 
         if ((targetItem.currentBids + requestedQty) > targetItem.limit) {
             const slotsLeft = targetItem.limit - targetItem.currentBids;
-            return res.status(400).json({ error: `Not enough items left! Only ${slotsLeft} slot(s) remaining.` });
+            return res.status(400).json({ error: `Not enough items left! Only ${slotsLeft} item(s) remaining.` });
         }
 
         const newBid = {
@@ -130,7 +130,7 @@ app.get('/admin', (req, res) => {
                     <th>Bidder Name</th>
                     <th>Item Ordered</th>
                     <th>Qty Wanted</th>
-                    <th>Bid Per Unit</th>
+                    <th>Bid Per Item</th>
                     <th>Total Offer Value</th>
                     <th>Current Status</th>
                     <th>Actions</th>
@@ -153,7 +153,7 @@ app.get('/admin', (req, res) => {
         </div>
 
         <div class="section">
-            <h2>Compare Leaderboard (Highest Bids Per Unit)</h2>
+            <h2>Compare Leaderboard (Highest Bids Per Item)</h2>
             <table>
                 <tr>
                     <th>Item</th>
@@ -163,9 +163,11 @@ app.get('/admin', (req, res) => {
                 ${localItems.map(i => {
                     const itemBids = localBids.filter(b => b.item === i.name);
                     let highestBid = null;
+                    
                     if (itemBids.length > 0) {
-                        highestBid = itemBids.reduce((max, b) => b.amount > max.amount ? b : max, itemBids[0]);
+                        highestBid = itemBids.reduce((max, b) => (b.amount > max.amount ? b : max), itemBids[0]);
                     }
+                    
                     return `
                     <tr>
                         <td>${i.name}</td>
@@ -257,5 +259,4 @@ app.post('/admin/delete-bid', (req, res) => {
     }
     res.json({ success: true });
 });
-
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(Server running on port ${PORT}));
