@@ -3,10 +3,10 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// Essential middlewares - Must be at the very top!
+// Essential middlewares
 app.use(cors());
 app.use(express.json());
-app.use(express.urlencoded({ extended: true })); // Fixes the form submission issue
+app.use(express.urlencoded({ extended: true }));
 
 // Temporary in-memory databases
 let items = [
@@ -35,7 +35,7 @@ app.post('/api/bids', (req, res) => {
 
     const newBid = {
         id: Date.now(),
-        name,
+        name: name.trim(),
         item,
         amount: parseFloat(amount),
         status: 'pending' 
@@ -108,7 +108,7 @@ app.get('/admin', (req, res) => {
                     <td>
                         <button class="btn accept" onclick="updateStatus(${b.id}, 'accepted')">Accept</button>
                         <button class="btn maybe" onclick="updateStatus(${b.id}, 'maybe')">Maybe</button>
-                        <button class="btn decline" onclick="updateStatus(${b.id}, 'declined')">Decline</button>
+                        <button class="btn decline" onclick="deleteBid(${b.id})">Decline (Delete)</button>
                     </td>
                 </tr>`).join('')}
             </table>
@@ -124,7 +124,7 @@ app.get('/admin', (req, res) => {
                 </tr>
                 ${items.map(i => {
                     const itemBids = bids.filter(b => b.item === i.name);
-                    const highestBid = itemBids.length ? itemBids.reduce((max, b) => b.amount > max.amount ? b : max, itemBids[0]) : null;
+                    const highestBid = itemBids.length ? itemBids.reduce((max, b) => b.amount > max.amount ? b : max, itemBids) : null;
                     return `
                     <tr>
                         <td>${i.name}</td>
@@ -144,13 +144,24 @@ app.get('/admin', (req, res) => {
                 });
                 location.reload();
             }
+
+            async function deleteBid(id) {
+                if(confirm("Are you sure you want to decline and permanently delete this bid?")) {
+                    await fetch('/admin/delete-bid', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ id })
+                    });
+                    location.reload();
+                }
+            }
         </script>
     </body>
     </html>
     `);
 });
 
-// Corrected logic route for adding items from dashboard form
+// Route for adding items
 app.post('/admin/add-item', (req, res) => {
     const name = req.body.itemName;
     const limit = parseInt(req.body.itemLimit);
@@ -161,17 +172,37 @@ app.post('/admin/add-item', (req, res) => {
     res.redirect('/admin');
 });
 
-// Logic route for deleting items
+// Route for deleting items
 app.get('/admin/delete-item', (req, res) => {
-    items = items.filter(i => i.name !== req.query.name);
+    const itemName = req.query.name;
+    items = items.filter(i => i.name !== itemName);
+    // Also clear bids associated with deleted item
+    bids = bids.filter(b => b.item !== itemName);
     res.redirect('/admin');
 });
 
-// Logic route for live bid status updates
+// Route for bid status updates (Accept / Maybe)
 app.post('/admin/update-bid', (req, res) => {
     const { id, status } = req.body;
     const bid = bids.find(b => b.id === id);
     if (bid) bid.status = status;
+    res.json({ success: true });
+});
+
+// NEW: Route to completely delete/decline a bid and restore item slot limit
+app.post('/admin/delete-bid', (req, res) => {
+    const { id } = req.body;
+    const bidToDelete = bids.find(b => b.id === id);
+    
+    if (bidToDelete) {
+        // Find the item and decrease its currentBid count to open up a slot
+        const targetItem = items.find(i => i.name === bidToDelete.item);
+        if (targetItem && targetItem.currentBids > 0) {
+            targetItem.currentBids--;
+        }
+        // Permanently filter out the bid from the array
+        bids = bids.filter(b => b.id !== id);
+    }
     res.json({ success: true });
 });
 
