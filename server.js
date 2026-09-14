@@ -1,5 +1,7 @@
 const express = require('express');
 const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
@@ -8,55 +10,80 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Temporary in-memory databases
-let items = [
-    { name: "Farus", limit: 4, currentBids: 0 }
-];
+// Path definitions for local storage files
+const DATA_DIR = path.join(__dirname, 'data');
+const ITEMS_FILE = path.join(DATA_DIR, 'items.json');
+const BIDS_FILE = path.join(DATA_DIR, 'bids.json');
 
-let bids = [];
+// Ensure data folder and storage files exist on startup
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
+if (!fs.existsSync(ITEMS_FILE)) fs.writeFileSync(ITEMS_FILE, JSON.stringify([{ name: "Farus", limit: 4, currentBids: 0 }]));
+if (!fs.existsSync(BIDS_FILE)) fs.writeFileSync(BIDS_FILE, JSON.stringify([]));
+
+// Helper functions to read and write records safely
+function getItems() { return JSON.parse(fs.readFileSync(ITEMS_FILE, 'utf8')); }
+function saveItems(data) { fs.writeFileSync(ITEMS_FILE, JSON.stringify(data, null, 2)); }
+function getBids() { return JSON.parse(fs.readFileSync(BIDS_FILE, 'utf8')); }
+function saveBids(data) { fs.writeFileSync(BIDS_FILE, JSON.stringify(data, null, 2)); }
 
 // --- PUBLIC API FOR GOOGLE SITES FRONTEND ---
 
 // Get active items
 app.get('/api/items', (req, res) => {
-    res.json(items);
+    try {
+        res.json(getItems());
+    } catch (err) {
+        res.status(500).json({ error: "Failed to read database records" });
+    }
 });
 
 // Submit a new bid
 app.post('/api/bids', (req, res) => {
-    const { name, item, amount, quantity } = req.body;
-    
-    const targetItem = items.find(i => i.name === item);
-    if (!targetItem) return res.status(404).json({ error: "Item not found" });
-    
-    const requestedQty = parseInt(quantity) || 1;
-    const bidAmount = parseFloat(amount);
+    try {
+        const { name, item, amount, quantity } = req.body;
+        let localItems = getItems();
+        let localBids = getBids();
+        
+        const targetItem = localItems.find(i => i.name === item);
+        if (!targetItem) return res.status(404).json({ error: "Item not found" });
+        
+        const requestedQty = parseInt(quantity) || 1;
+        const bidAmount = parseFloat(amount) || 0;
 
-    // Check if the requested quantity exceeds remaining limit slots
-    if ((targetItem.currentBids + requestedQty) > targetItem.limit) {
-        const slotsLeft = targetItem.limit - targetItem.currentBids;
-        return res.status(400).json({ error: `Not enough items left! Only ${slotsLeft} slot(s) remaining.` });
+        if ((targetItem.currentBids + requestedQty) > targetItem.limit) {
+            const slotsLeft = targetItem.limit - targetItem.currentBids;
+            return res.status(400).json({ error: `Not enough items left! Only ${slotsLeft} slot(s) remaining.` });
+        }
+
+        const newBid = {
+            id: Date.now(),
+            name: name ? name.trim() : "Anonymous",
+            item,
+            quantity: requestedQty,
+            amount: bidAmount,
+            totalOffer: bidAmount * requestedQty,
+            status: 'pending' 
+        };
+
+        localBids.push(newBid);
+        targetItem.currentBids += requestedQty;
+        
+        saveItems(localItems);
+        saveBids(localBids);
+        
+        res.status(201).json(newBid);
+    } catch (err) {
+        res.status(500).json({ error: "Server processing error" });
     }
-
-    const newBid = {
-        id: Date.now(),
-        name: name.trim(),
-        item,
-        quantity: requestedQty,
-        amount: bidAmount, // Bid price per single unit
-        totalOffer: bidAmount * requestedQty, // Total value
-        status: 'pending' 
-    };
-
-    bids.push(newBid);
-    targetItem.currentBids += requestedQty; // Deduct slots based on requested quantity
-    res.status(201).json(newBid);
 });
 
 
 // --- ADMIN BACKEND DASHBOARD ---
 
 app.get('/admin', (req, res) => {
+    const localItems = getItems();
+    const localBids = getBids();
+
     res.send(`
     <!DOCTYPE html>
     <html>
@@ -87,7 +114,7 @@ app.get('/admin', (req, res) => {
             </form>
             <h3>Current Items Available</h3>
             <ul>
-                ${items.map(i => `
+                ${localItems.map(i => `
                     <li>
                         <strong>${i.name}</strong> (Total Limit: ${i.limit}, Reserved/Taken: ${i.currentBids}) 
                         <a class="remove-link" href="/admin/delete-item?name=${encodeURIComponent(i.name)}">[Remove]</a>
@@ -108,13 +135,13 @@ app.get('/admin', (req, res) => {
                     <th>Current Status</th>
                     <th>Actions</th>
                 </tr>
-                ${bids.map(b => `
+                ${localBids.map(b => `
                 <tr>
                     <td>${b.name}</td>
                     <td>${b.item}</td>
                     <td>${b.quantity}</td>
-                    <td>$${b.amount.toFixed(2)}</td>
-                    <td>$${b.totalOffer.toFixed(2)}</td>
+                    <td>$${Number(b.amount).toFixed(2)}</td>
+                    <td>$${Number(b.totalOffer).toFixed(2)}</td>
                     <td><strong>${b.status.toUpperCase()}</strong></td>
                     <td>
                         <button class="btn accept" onclick="updateStatus(${b.id}, 'accepted')">Accept</button>
@@ -133,9 +160,8 @@ app.get('/admin', (req, res) => {
                     <th>Highest Bidder</th>
                     <th>Highest Single Bid Offer</th>
                 </tr>
-                ${items.map(i => {
-                    const itemBids = bids.filter(b => b.item === i.name);
-                    // FIXED: Correct check logic loops cleanly to avoid returning undefined arrays
+                ${localItems.map(i => {
+                    const itemBids = localBids.filter(b => b.item === i.name);
                     let highestBid = null;
                     if (itemBids.length > 0) {
                         highestBid = itemBids.reduce((max, b) => b.amount > max.amount ? b : max, itemBids[0]);
@@ -144,7 +170,7 @@ app.get('/admin', (req, res) => {
                     <tr>
                         <td>${i.name}</td>
                         <td>${highestBid ? highestBid.name : 'No bids yet'}</td>
-                        <td>${highestBid ? '$' + highestBid.amount.toFixed(2) : '-'}</td>
+                        <td>${highestBid ? '$' + Number(highestBid.amount).toFixed(2) : '-'}</td>
                     </tr>`;
                 }).join('')}
             </table>
@@ -178,11 +204,13 @@ app.get('/admin', (req, res) => {
 
 // Route for adding items
 app.post('/admin/add-item', (req, res) => {
+    let localItems = getItems();
     const name = req.body.itemName;
     const limit = parseInt(req.body.itemLimit);
 
     if (name && !isNaN(limit)) {
-        items.push({ name: name.trim(), limit: limit, currentBids: 0 });
+        localItems.push({ name: name.trim(), limit: limit, currentBids: 0 });
+        saveItems(localItems);
     }
     res.redirect('/admin');
 });
@@ -190,30 +218,42 @@ app.post('/admin/add-item', (req, res) => {
 // Route for deleting items
 app.get('/admin/delete-item', (req, res) => {
     const itemName = req.query.name;
-    items = items.filter(i => i.name !== itemName);
-    bids = bids.filter(b => b.item !== itemName);
+    let localItems = getItems().filter(i => i.name !== itemName);
+    let localBids = getBids().filter(b => b.item !== itemName);
+    
+    saveItems(localItems);
+    saveBids(localBids);
     res.redirect('/admin');
 });
 
-// Route for bid status updates
+// Route for updating bid statuses
 app.post('/admin/update-bid', (req, res) => {
     const { id, status } = req.body;
-    const bid = bids.find(b => b.id === id);
-    if (bid) bid.status = status;
+    let localBids = getBids();
+    const bid = localBids.find(b => b.id === id);
+    if (bid) {
+        bid.status = status;
+        saveBids(localBids);
+    }
     res.json({ success: true });
 });
 
-// Route to completely delete/decline a bid and restore item slot limit counts accurately
+// Route to delete/decline a bid and restore item slot metrics
 app.post('/admin/delete-bid', (req, res) => {
     const { id } = req.body;
-    const bidToDelete = bids.find(b => b.id === id);
+    let localBids = getBids();
+    let localItems = getItems();
     
+    const bidToDelete = localBids.find(b => b.id === id);
     if (bidToDelete) {
-        const targetItem = items.find(i => i.name === bidToDelete.item);
+        const targetItem = localItems.find(i => i.name === bidToDelete.item);
         if (targetItem) {
             targetItem.currentBids = Math.max(0, targetItem.currentBids - bidToDelete.quantity);
         }
-        bids = bids.filter(b => b.id !== id);
+        localBids = localBids.filter(b => b.id !== id);
+        
+        saveItems(localItems);
+        saveBids(localBids);
     }
     res.json({ success: true });
 });
