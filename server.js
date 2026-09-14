@@ -165,7 +165,7 @@ app.get('/admin', (req, res) => {
                     let highestBid = null;
                     
                     if (itemBids.length > 0) {
-                        highestBid = itemBids.reduce((max, b) => (b.amount > max.amount ? b : max), itemBids[0]);
+                        highestBid = itemBids.reduce((max, b) => (b.amount > max.amount ? b : max), itemBids);
                     }
                     
                     return `
@@ -259,4 +259,5 @@ app.post('/admin/delete-bid', (req, res) => {
     }
     res.json({ success: true });
 });
-app.listen(PORT, () => console.log(Server running on port ${PORT}));
+
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
