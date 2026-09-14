@@ -5,22 +5,22 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// Essential middlewares
+// Regular setup helpers
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Path definitions for local storage files
+// Folders to save data so it never forgets
 const DATA_DIR = path.join(__dirname, 'data');
 const ITEMS_FILE = path.join(DATA_DIR, 'items.json');
 const BIDS_FILE = path.join(DATA_DIR, 'bids.json');
 
-// Ensure data folder and storage files exist on startup
+// Make files if they aren't there yet
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR);
 if (!fs.existsSync(ITEMS_FILE)) fs.writeFileSync(ITEMS_FILE, JSON.stringify([{ name: "Farus", limit: 4, currentBids: 0 }]));
 if (!fs.existsSync(BIDS_FILE)) fs.writeFileSync(BIDS_FILE, JSON.stringify([]));
 
-// Helper functions to read and write records safely with explicit type safety mapping
+// Quick functions to grab or save data safely
 function getItems() { 
     const data = JSON.parse(fs.readFileSync(ITEMS_FILE, 'utf8'));
     return data.map(i => ({
@@ -45,18 +45,18 @@ function getBids() {
 }
 function saveBids(data) { fs.writeFileSync(BIDS_FILE, JSON.stringify(data, null, 2)); }
 
-// --- PUBLIC API FOR GOOGLE SITES FRONTEND ---
+// --- CODE FOR GOOGLE SITES TO TALK TO ---
 
-// Get active items
+// Send list of items out
 app.get('/api/items', (req, res) => {
     try {
         res.json(getItems());
     } catch (err) {
-        res.status(500).json({ error: "Failed to read database records" });
+        res.status(500).json({ error: "Couldn't load items" });
     }
 });
 
-// Submit a new bid
+// Take a new request from Google Sites
 app.post('/api/bids', (req, res) => {
     try {
         const { name, item, amount, quantity } = req.body;
@@ -71,12 +71,12 @@ app.post('/api/bids', (req, res) => {
 
         if ((targetItem.currentBids + requestedQty) > targetItem.limit) {
             const slotsLeft = targetItem.limit - targetItem.currentBids;
-            return res.status(400).json({ error: `Not enough items left! Only ${slotsLeft} item(s) remaining.` });
+            return res.status(400).json({ error: `Not enough left! Only ${slotsLeft} left.` });
         }
 
         const newBid = {
             id: Date.now(),
-            name: name ? name.trim() : "Anonymous",
+            name: name ? name.trim() : "No Name",
             item,
             quantity: requestedQty,
             amount: bidAmount,
@@ -92,22 +92,25 @@ app.post('/api/bids', (req, res) => {
         
         res.status(201).json(newBid);
     } catch (err) {
-        res.status(500).json({ error: "Server processing error" });
+        res.status(500).json({ error: "Server error" });
     }
 });
 
 
-// --- ADMIN BACKEND DASHBOARD ---
+// --- OWNER CONTROL PAGE PANEL ---
 
 app.get('/admin', (req, res) => {
     const localItems = getItems();
     const localBids = getBids();
 
+    // Sort all bids from highest single offer to lowest single offer for the leaderboard
+    const sortedBids = [...localBids].sort((a, b) => b.amount - a.amount);
+
     res.send(`
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Admin Dashboard</title>
+        <title>Owner Control Page</title>
         <style>
             body { font-family: sans-serif; margin: 30px; background: #f4f4f9; color: #333;}
             table { width: 100%; border-collapse: collapse; margin-bottom: 30px; background: white;}
@@ -122,37 +125,37 @@ app.get('/admin', (req, res) => {
         </style>
     </head>
     <body>
-        <h1>Auction Backend Panel</h1>
+        <h1>Owner Control Page</h1>
         
         <div class="section">
-            <h2>Add / Manage Items</h2>
+            <h2>Add / Remove Items</h2>
             <form action="/admin/add-item" method="POST">
                 <input type="text" name="itemName" placeholder="Item Name" required>
-                <input type="number" name="itemLimit" placeholder="Max Quantity Available" required min="1">
+                <input type="number" name="itemLimit" placeholder="How many can people get?" required min="1">
                 <button type="submit">Add Item</button>
             </form>
-            <h3>Current Items Available</h3>
+            <h3>Current Items You Added</h3>
             <ul>
                 ${localItems.map(i => `
                     <li>
-                        <strong>${i.name}</strong> (Total Limit: ${i.limit}, Reserved/Taken: ${i.currentBids}) 
-                        <a class="remove-link" href="/admin/delete-item?name=${encodeURIComponent(i.name)}">[Remove]</a>
+                        <strong>${i.name}</strong> (Total Available: ${i.limit}, Already Taken: ${i.currentBids}) 
+                        <a class="remove-link" href="/admin/delete-item?name=${encodeURIComponent(i.name)}">[Remove Item]</a>
                     </li>
                 `).join('')}
             </ul>
         </div>
 
         <div class="section">
-            <h2>Incoming Bids (Review Panel)</h2>
+            <h2>People Asking for Items</h2>
             <table>
                 <tr>
-                    <th>Bidder Name</th>
-                    <th>Item Ordered</th>
-                    <th>Qty Wanted</th>
-                    <th>Bid Per Item</th>
-                    <th>Total Offer Value</th>
-                    <th>Current Status</th>
-                    <th>Actions</th>
+                    <th>Name</th>
+                    <th>Item Wanted</th>
+                    <th>How Many They Want</th>
+                    <th>Money Per Single Item</th>
+                    <th>Total Money Offered</th>
+                    <th>Status</th>
+                    <th>What do you want to do?</th>
                 </tr>
                 ${localBids.map(b => `
                 <tr>
@@ -172,29 +175,24 @@ app.get('/admin', (req, res) => {
         </div>
 
         <div class="section">
-            <h2>Compare Leaderboard (Highest Bids Per Item)</h2>
+            <h2>Who Offered the Most Money (Leaderboard)</h2>
             <table>
                 <tr>
+                    <th>Rank</th>
                     <th>Item</th>
-                    <th>Highest Bidder</th>
-                    <th>Highest Single Bid Offer</th>
+                    <th>Person's Name</th>
+                    <th>Money Offered Per Item</th>
+                    <th>Total Money Offered</th>
                 </tr>
-                ${localItems.map(i => {
-                    const itemBids = localBids.filter(b => b.item === i.name);
-                    let highestBid = null;
-                    
-                    if (itemBids.length > 0) {
-                        // Math comparison loop 
-                        highestBid = itemBids.reduce((max, b) => (b.amount > max.amount ? b : max));
-                    }
-                    
-                    return `
-                    <tr>
-                        <td>${i.name}</td>
-                        <td>${highestBid ? highestBid.name : 'No bids yet'}</td>
-                        <td>${highestBid ? '$' + highestBid.amount.toFixed(2) : '-'}</td>
-                    </tr>`;
-                }).join('')}
+                ${sortedBids.length > 0 ? sortedBids.map((b, index) => `
+                <tr>
+                    <td><strong>#${index + 1}</strong></td>
+                    <td>${b.item}</td>
+                    <td>${b.name}</td>
+                    <td>$${b.amount.toFixed(2)}</td>
+                    <td>$${b.totalOffer.toFixed(2)}</td>
+                </tr>
+                `).join('') : `<tr><td colspan="5" style="text-align: center; color: #666;">Nobody has offered any money yet!</td></tr>`}
             </table>
         </div>
 
@@ -209,7 +207,7 @@ app.get('/admin', (req, res) => {
             }
 
             async function deleteBid(id) {
-                if(confirm("Are you sure you want to decline and permanently delete this bid?")) {
+                if(confirm("Are you sure you want to decline and delete this person's offer completely?")) {
                     await fetch('/admin/delete-bid', {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
@@ -224,7 +222,7 @@ app.get('/admin', (req, res) => {
     `);
 });
 
-// Route for adding items
+// Route to add items
 app.post('/admin/add-item', (req, res) => {
     let localItems = getItems();
     const name = req.body.itemName;
@@ -237,7 +235,7 @@ app.post('/admin/add-item', (req, res) => {
     res.redirect('/admin');
 });
 
-// Route for deleting items
+// Route to completely delete items
 app.get('/admin/delete-item', (req, res) => {
     const itemName = req.query.name;
     let localItems = getItems().filter(i => i.name !== itemName);
@@ -248,7 +246,7 @@ app.get('/admin/delete-item', (req, res) => {
     res.redirect('/admin');
 });
 
-// Route for updating bid statuses
+// Route to change status to Accept or Maybe
 app.post('/admin/update-bid', (req, res) => {
     const { id, status } = req.body;
     let localBids = getBids();
@@ -260,8 +258,7 @@ app.post('/admin/update-bid', (req, res) => {
     res.json({ success: true });
 });
 
-// Route to delete/decline a bid and restore item slot metrics
-// Route to delete/decline a bid and restore item slot metrics
+// Route to delete a bid and free up slots
 app.post('/admin/delete-bid', (req, res) => {
     const { id } = req.body;
     let localBids = getBids();
@@ -281,4 +278,5 @@ app.post('/admin/delete-bid', (req, res) => {
     res.json({ success: true });
 });
 
+// Fire up the server
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
