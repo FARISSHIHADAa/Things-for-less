@@ -1,12 +1,16 @@
 {
-  "name": "Things-for-less",
+  "name": "things-for-less-backend",
   "version": "1.0.0",
-  "description": "",
+  "description": "Things for less backend server for google site",
   "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC"
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
 }
