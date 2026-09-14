@@ -10,8 +10,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // Temporary in-memory databases
 let items = [
-    { name: "Vintage Watch", limit: 3, currentBids: 0 },
-    { name: "Leather Jacket", limit: 1, currentBids: 0 }
+    { name: "Farus", limit: 4, currentBids: 0 }
 ];
 
 let bids = [];
@@ -25,24 +24,32 @@ app.get('/api/items', (req, res) => {
 
 // Submit a new bid
 app.post('/api/bids', (req, res) => {
-    const { name, item, amount } = req.body;
+    const { name, item, amount, quantity } = req.body;
     
     const targetItem = items.find(i => i.name === item);
     if (!targetItem) return res.status(404).json({ error: "Item not found" });
-    if (targetItem.currentBids >= targetItem.limit) {
-        return res.status(400).json({ error: "This item has hit its bid limit!" });
+    
+    const requestedQty = parseInt(quantity) || 1;
+    const bidAmount = parseFloat(amount);
+
+    // Check if the requested quantity exceeds remaining limit slots
+    if ((targetItem.currentBids + requestedQty) > targetItem.limit) {
+        const slotsLeft = targetItem.limit - targetItem.currentBids;
+        return res.status(400).json({ error: `Not enough items left! Only ${slotsLeft} slot(s) remaining.` });
     }
 
     const newBid = {
         id: Date.now(),
         name: name.trim(),
         item,
-        amount: parseFloat(amount),
+        quantity: requestedQty,
+        amount: bidAmount, // Bid price per single unit
+        totalOffer: bidAmount * requestedQty, // Total value
         status: 'pending' 
     };
 
     bids.push(newBid);
-    targetItem.currentBids++;
+    targetItem.currentBids += requestedQty; // Deduct slots based on requested quantity
     res.status(201).json(newBid);
 });
 
@@ -75,14 +82,14 @@ app.get('/admin', (req, res) => {
             <h2>Add / Manage Items</h2>
             <form action="/admin/add-item" method="POST">
                 <input type="text" name="itemName" placeholder="Item Name" required>
-                <input type="number" name="itemLimit" placeholder="Max Allowable Bids" required min="1">
+                <input type="number" name="itemLimit" placeholder="Max Quantity Available" required min="1">
                 <button type="submit">Add Item</button>
             </form>
             <h3>Current Items Available</h3>
             <ul>
                 ${items.map(i => `
                     <li>
-                        <strong>${i.name}</strong> (Limit: ${i.limit}, Received: ${i.currentBids}) 
+                        <strong>${i.name}</strong> (Total Limit: ${i.limit}, Reserved/Taken: ${i.currentBids}) 
                         <a class="remove-link" href="/admin/delete-item?name=${encodeURIComponent(i.name)}">[Remove]</a>
                     </li>
                 `).join('')}
@@ -95,7 +102,9 @@ app.get('/admin', (req, res) => {
                 <tr>
                     <th>Bidder Name</th>
                     <th>Item Ordered</th>
-                    <th>Amount Offered</th>
+                    <th>Qty Wanted</th>
+                    <th>Bid Per Unit</th>
+                    <th>Total Offer Value</th>
                     <th>Current Status</th>
                     <th>Actions</th>
                 </tr>
@@ -103,7 +112,9 @@ app.get('/admin', (req, res) => {
                 <tr>
                     <td>${b.name}</td>
                     <td>${b.item}</td>
-                    <td>$${b.amount}</td>
+                    <td>${b.quantity}</td>
+                    <td>$${b.amount.toFixed(2)}</td>
+                    <td>$${b.totalOffer.toFixed(2)}</td>
                     <td><strong>${b.status.toUpperCase()}</strong></td>
                     <td>
                         <button class="btn accept" onclick="updateStatus(${b.id}, 'accepted')">Accept</button>
@@ -115,21 +126,25 @@ app.get('/admin', (req, res) => {
         </div>
 
         <div class="section">
-            <h2>Compare Leaderboard (Highest Bids)</h2>
+            <h2>Compare Leaderboard (Highest Bids Per Unit)</h2>
             <table>
                 <tr>
                     <th>Item</th>
                     <th>Highest Bidder</th>
-                    <th>Highest Offer</th>
+                    <th>Highest Single Bid Offer</th>
                 </tr>
                 ${items.map(i => {
                     const itemBids = bids.filter(b => b.item === i.name);
-                    const highestBid = itemBids.length ? itemBids.reduce((max, b) => b.amount > max.amount ? b : max, itemBids) : null;
+                    // FIXED: Correct check logic loops cleanly to avoid returning undefined arrays
+                    let highestBid = null;
+                    if (itemBids.length > 0) {
+                        highestBid = itemBids.reduce((max, b) => b.amount > max.amount ? b : max, itemBids[0]);
+                    }
                     return `
                     <tr>
                         <td>${i.name}</td>
                         <td>${highestBid ? highestBid.name : 'No bids yet'}</td>
-                        <td>${highestBid ? '$' + highestBid.amount : '-'}</td>
+                        <td>${highestBid ? '$' + highestBid.amount.toFixed(2) : '-'}</td>
                     </tr>`;
                 }).join('')}
             </table>
@@ -176,12 +191,11 @@ app.post('/admin/add-item', (req, res) => {
 app.get('/admin/delete-item', (req, res) => {
     const itemName = req.query.name;
     items = items.filter(i => i.name !== itemName);
-    // Also clear bids associated with deleted item
     bids = bids.filter(b => b.item !== itemName);
     res.redirect('/admin');
 });
 
-// Route for bid status updates (Accept / Maybe)
+// Route for bid status updates
 app.post('/admin/update-bid', (req, res) => {
     const { id, status } = req.body;
     const bid = bids.find(b => b.id === id);
@@ -189,18 +203,16 @@ app.post('/admin/update-bid', (req, res) => {
     res.json({ success: true });
 });
 
-// NEW: Route to completely delete/decline a bid and restore item slot limit
+// Route to completely delete/decline a bid and restore item slot limit counts accurately
 app.post('/admin/delete-bid', (req, res) => {
     const { id } = req.body;
     const bidToDelete = bids.find(b => b.id === id);
     
     if (bidToDelete) {
-        // Find the item and decrease its currentBid count to open up a slot
         const targetItem = items.find(i => i.name === bidToDelete.item);
-        if (targetItem && targetItem.currentBids > 0) {
-            targetItem.currentBids--;
+        if (targetItem) {
+            targetItem.currentBids = Math.max(0, targetItem.currentBids - bidToDelete.quantity);
         }
-        // Permanently filter out the bid from the array
         bids = bids.filter(b => b.id !== id);
     }
     res.json({ success: true });
